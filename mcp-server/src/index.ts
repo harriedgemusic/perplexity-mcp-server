@@ -390,12 +390,12 @@ class PerplexityAutomation {
 
     console.error('[Perplexity] Initializing browser session...');
 
-    // Use Comet browser on macOS
-    const cometPath = '/Applications/Comet.app/Contents/MacOS/Comet';
+    // Use installed Google Chrome on macOS
+    const chromePath = '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
     
     const context = await chromium.launchPersistentContext(this.userDataDir, {
       headless: false,
-      executablePath: cometPath, // Use Comet browser
+      executablePath: chromePath, // Use installed Chrome
       viewport: { width: 1280, height: 900 },
       locale: 'en-US',
       timezoneId: 'America/New_York',
