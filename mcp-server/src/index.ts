@@ -130,41 +130,259 @@ class PerplexityAutomation {
   }
 
   /**
-   * Extract answer from .gap-y-md container (the main answer content)
+   * Analyze page structure and log details for debugging
+   */
+  private async analyzePageStructure(page: Page): Promise<void> {
+    console.error('\n[DEBUG] ========== PAGE STRUCTURE ANALYSIS ==========\n');
+
+    try {
+      const analysis = await page.evaluate(() => {
+        const results: any = {
+          finishedElements: [],
+          gapYMdElements: [],
+          answerContainers: [],
+          siblingStructure: [],
+        };
+
+        // 1. Find all elements containing "Finished" text
+        const allElements = Array.from(document.querySelectorAll('*'));
+        const finishedEls = allElements.filter(el => {
+          const text = el.textContent || '';
+          return text.includes('Finished') && text.length < 200;
+        });
+
+        finishedEls.forEach((el, i) => {
+          const parent = el.parentElement;
+          const grandParent = parent?.parentElement;
+          const greatGrandParent = grandParent?.parentElement;
+          const greatGreatGrandParent = greatGrandParent?.parentElement;
+
+          results.finishedElements.push({
+            index: i,
+            tagName: el.tagName,
+            text: el.textContent?.trim().substring(0, 100),
+            className: el.className,
+            parent: parent ? {
+              tag: parent.tagName,
+              class: parent.className,
+            } : null,
+            grandParent: grandParent ? {
+              tag: grandParent.tagName,
+              class: grandParent.className,
+            } : null,
+            greatGrandParent: greatGrandParent ? {
+              tag: greatGrandParent.tagName,
+              class: greatGrandParent.className,
+              id: greatGrandParent.id,
+            } : null,
+            greatGreatGrandParent: greatGreatGrandParent ? {
+              tag: greatGreatGrandParent.tagName,
+              class: greatGreatGrandParent.className,
+              childCount: greatGreatGrandParent.children.length,
+              innerHTML: greatGreatGrandParent.innerHTML.substring(0, 500),
+            } : null,
+          });
+        });
+
+        // 2. Find .gap-y-md elements and their structure
+        document.querySelectorAll('.gap-y-md').forEach((el, i) => {
+          const parent = el.parentElement;
+          const siblings = parent ? Array.from(parent.children) : [];
+          
+          results.gapYMdElements.push({
+            index: i,
+            className: el.className,
+            parentClass: parent?.className,
+            parentTag: parent?.tagName,
+            siblingCount: siblings.length,
+            siblingIndex: siblings.indexOf(el),
+            innerHTML: el.innerHTML.substring(0, 800),
+            textContent: el.textContent?.substring(0, 500),
+            childCount: el.children.length,
+          });
+        });
+
+        // 3. Find structure around "div.flex.items-center.justify-between"
+        const completeIndicators = document.querySelectorAll('div.flex.items-center.justify-between');
+        completeIndicators.forEach((el, i) => {
+          const parent = el.parentElement;
+          const siblings = parent ? Array.from(parent.children) : [];
+          const prevSibling = el.previousElementSibling;
+          const nextSibling = el.nextElementSibling;
+
+          results.siblingStructure.push({
+            index: i,
+            className: el.className,
+            parentClass: parent?.className,
+            siblingIndex: siblings.indexOf(el),
+            prevSibling: prevSibling ? {
+              tag: prevSibling.tagName,
+              class: prevSibling.className,
+              text: prevSibling.textContent?.substring(0, 200),
+            } : null,
+            nextSibling: nextSibling ? {
+              tag: nextSibling.tagName,
+              class: nextSibling.className,
+              text: nextSibling.textContent?.substring(0, 200),
+            } : null,
+          });
+        });
+
+        // 4. Find potential answer containers
+        const containerSelectors = [
+          { name: 'prose', selector: '.prose' },
+          { name: 'markdown', selector: '[class*="markdown"], [class*="Markdown"]' },
+          { name: 'answer', selector: '[class*="answer"]' },
+          { name: 'response', selector: '[class*="response"]' },
+          { name: 'article', selector: 'article' },
+          { name: 'main-div', selector: 'main > div' },
+        ];
+
+        containerSelectors.forEach(({ name, selector }) => {
+          document.querySelectorAll(selector).forEach((el, i) => {
+            const text = el.textContent || '';
+            if (text.length > 100) {
+              results.answerContainers.push({
+                type: name,
+                index: i,
+                className: el.className,
+                tagName: el.tagName,
+                textLength: text.length,
+                textPreview: text.substring(0, 300),
+              });
+            }
+          });
+        });
+
+        return results;
+      });
+
+      // Log results
+      console.error('[DEBUG] --- FINISHED ELEMENTS ---');
+      analysis.finishedElements.forEach((el: any) => {
+        console.error(`  [${el.index}] <${el.tagName}> "${el.text}"`);
+        console.error(`      class: ${el.className}`);
+        if (el.greatGreatGrandParent) {
+          console.error(`      great-great-grandparent: <${el.greatGreatGrandParent.tag}> class="${el.greatGreatGrandParent.class}"`);
+          console.error(`      children count: ${el.greatGreatGrandParent.childCount}`);
+        }
+      });
+
+      console.error('\n[DEBUG] --- GAP-Y-MD ELEMENTS ---');
+      analysis.gapYMdElements.forEach((el: any) => {
+        console.error(`  [${el.index}] parent: <${el.parentTag}> class="${el.parentClass}"`);
+        console.error(`      sibling index: ${el.siblingIndex} of ${el.siblingCount}`);
+        console.error(`      text: ${el.textContent?.substring(0, 200)}`);
+      });
+
+      console.error('\n[DEBUG] --- COMPLETION INDICATOR STRUCTURE ---');
+      analysis.siblingStructure.forEach((el: any) => {
+        console.error(`  [${el.index}] sibling index: ${el.siblingIndex}`);
+        console.error(`      prev sibling: <${el.prevSibling?.tag}> class="${el.prevSibling?.class}"`);
+        console.error(`      next sibling: <${el.nextSibling?.tag}> class="${el.nextSibling?.class}"`);
+      });
+
+      console.error('\n[DEBUG] --- ANSWER CONTAINERS ---');
+      analysis.answerContainers.slice(0, 10).forEach((el: any) => {
+        console.error(`  [${el.type}] ${el.textLength} chars`);
+        console.error(`      class: ${el.className}`);
+        console.error(`      preview: ${el.textPreview?.substring(0, 150)}...`);
+      });
+
+      console.error('\n[DEBUG] ==========================================\n');
+
+    } catch (e) {
+      console.error('[DEBUG] Analysis failed:', e);
+    }
+  }
+
+  /**
+   * Extract answer - find the container that comes AFTER the completion indicator
    */
   private async extractAnswer(page: Page): Promise<string> {
-    // Primary: extract from .gap-y-md as specified
+    console.error('[Perplexity] Extracting answer...');
+
+    // First, analyze the page structure
+    await this.analyzePageStructure(page);
+
+    // Strategy 1: Find completion indicator, then get the answer container that follows
+    try {
+      const completeIndicator = page.locator('div.flex.items-center.justify-between').first();
+      if (await completeIndicator.isVisible({ timeout: 1000 })) {
+        // Get the parent container that holds the answer
+        // The structure is usually: parent > [answer content] > [completion indicator]
+        const parentContainer = completeIndicator.locator('xpath=..');
+        const grandParentContainer = parentContainer.locator('xpath=..');
+        
+        // Try to find the answer in siblings before the completion indicator
+        const answerContainer = completeIndicator.locator('xpath=preceding-sibling::*[1]');
+        if (await answerContainer.count() > 0) {
+          const text = await answerContainer.first().innerText();
+          if (text && text.length > 50) {
+            console.error('[Perplexity] Found answer in preceding sibling of completion indicator');
+            return text;
+          }
+        }
+
+        // Try grandparent's first child (often contains the answer)
+        const firstChild = grandParentContainer.locator('> :first-child');
+        if (await firstChild.count() > 0) {
+          const text = await firstChild.first().innerText();
+          if (text && text.length > 50) {
+            console.error('[Perplexity] Found answer in first child of grandparent');
+            return text;
+          }
+        }
+      }
+    } catch (e) {
+      console.error('[Perplexity] Strategy 1 failed:', e);
+    }
+
+    // Strategy 2: Find .gap-y-md and get content after "Finished" appears
     try {
       const gapContainer = page.locator('.gap-y-md').first();
       if (await gapContainer.isVisible({ timeout: 2000 })) {
-        const text = await gapContainer.innerText();
-        if (text && text.trim().length > 0) {
+        // Get the last substantial text content
+        const allText = await gapContainer.innerText();
+        
+        // Find where "Finished" appears and extract content after it
+        const finishedIndex = allText.indexOf('Finished');
+        if (finishedIndex > -1) {
+          // Get text after "Finished" indicator
+          const afterFinished = allText.substring(finishedIndex + 10).trim();
+          if (afterFinished.length > 50) {
+            console.error('[Perplexity] Found answer after "Finished" marker');
+            return afterFinished;
+          }
+        }
+
+        // Return full content if no "Finished" marker
+        if (allText && allText.trim().length > 0) {
           console.error('[Perplexity] Found answer in .gap-y-md');
-          return text.trim();
+          return allText.trim();
         }
       }
-    } catch {
-      // Fall through to alternatives
+    } catch (e) {
+      console.error('[Perplexity] Strategy 2 failed:', e);
     }
 
-    // Fallback selectors for the answer
+    // Strategy 3: Find prose/markdown content
     const answerSelectors = [
-      '.gap-y-md',
-      '[data-testid*="answer"]',
       '.prose',
+      '[class*="markdown"]',
+      '[class*="Markdown"]', 
       '[class*="answer"]',
       '[class*="response"]',
-      '.markdown',
-      '[class*="Markdown"]',
-      'main article',
+      'article',
+      'main > div > div',
     ];
 
     for (const selector of answerSelectors) {
       try {
-        const element = page.locator(selector).first();
-        if (await element.isVisible({ timeout: 1000 })) {
+        const elements = await page.locator(selector).all();
+        for (const element of elements) {
           const text = await element.innerText();
-          if (text && text.length > 50) {
+          if (text && text.length > 100) {
             console.error(`[Perplexity] Found answer using selector: ${selector}`);
             return text;
           }
