@@ -8,10 +8,12 @@ import {
   ErrorCode,
   McpError,
 } from '@modelcontextprotocol/sdk/types.js';
-import { chromium, Browser, Page, BrowserContext } from 'playwright';
+import { chromium, Page, BrowserContext } from 'playwright';
 import express from 'express';
 import cors from 'cors';
 import { z } from 'zod';
+import fs from 'fs';
+import path from 'path';
 
 // ==================== TYPES ====================
 
@@ -26,6 +28,7 @@ interface SearchResponse {
   answer?: string;
   sources?: Array<{ title: string; url: string }>;
   error?: string;
+  debug?: string;
 }
 
 // ==================== PERPLEXITY AUTOMATION ====================
@@ -33,6 +36,130 @@ interface SearchResponse {
 class PerplexityAutomation {
   private session: PerplexitySession | null = null;
   private userDataDir = './perplexity-user-data';
+  private debugDir = './debug-screenshots';
+
+  private async saveDebugScreenshot(page: Page, name: string): Promise<string | null> {
+    try {
+      if (!fs.existsSync(this.debugDir)) {
+        fs.mkdirSync(this.debugDir, { recursive: true });
+      }
+      const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+      const filepath = path.join(this.debugDir, `${name}-${timestamp}.png`);
+      await page.screenshot({ path: filepath, fullPage: true });
+      console.error(`[Debug] Screenshot saved: ${filepath}`);
+      return filepath;
+    } catch (e) {
+      console.error('[Debug] Failed to save screenshot:', e);
+      return null;
+    }
+  }
+
+  private async findSearchInput(page: Page): Promise<{ locator: any; method: string } | null> {
+    // Try multiple selectors for the search input
+    const selectors = [
+      // Current Perplexity selectors (2024-2025)
+      { locator: page.locator('textarea').first(), method: 'textarea' },
+      { locator: page.locator('[contenteditable="true"]').first(), method: 'contenteditable' },
+      { locator: page.locator('div[role="textbox"]').first(), method: 'role-textbox' },
+      { locator: page.locator('input[type="text"]').first(), method: 'input-text' },
+      // Try placeholder variations
+      { locator: page.locator('[placeholder*="Ask"]'), method: 'placeholder-ask' },
+      { locator: page.locator('[placeholder*="ask"]'), method: 'placeholder-ask-lower' },
+      { locator: page.locator('[placeholder*="question"]'), method: 'placeholder-question' },
+      { locator: page.locator('[placeholder*="Search"]'), method: 'placeholder-search' },
+      // Try aria-label
+      { locator: page.locator('[aria-label*="Ask"]'), method: 'aria-ask' },
+      { locator: page.locator('[aria-label*="Search"]'), method: 'aria-search' },
+      // Generic selectors
+      { locator: page.locator('.ProseMirror').first(), method: 'prosemirror' },
+      { locator: page.locator('[data-testid*="search"]').first(), method: 'testid-search' },
+      { locator: page.locator('[data-testid*="input"]').first(), method: 'testid-input' },
+    ];
+
+    for (const { locator, method } of selectors) {
+      try {
+        const isVisible = await locator.isVisible({ timeout: 1000 });
+        if (isVisible) {
+          console.error(`[Perplexity] Found input using method: ${method}`);
+          return { locator, method };
+        }
+      } catch {
+        // Try next selector
+      }
+    }
+
+    return null;
+  }
+
+  private async findSubmitButton(page: Page): Promise<any | null> {
+    const selectors = [
+      page.locator('button[type="submit"]'),
+      page.locator('button:has-text("Search")'),
+      page.locator('button[aria-label*="Search"]'),
+      page.locator('button[aria-label*="Send"]'),
+      page.locator('button:has-text("Ask")'),
+      page.locator('svg[class*="send"]').locator('..'),
+      page.locator('[data-testid*="submit"]'),
+      page.locator('[data-testid*="send"]'),
+    ];
+
+    for (const locator of selectors) {
+      try {
+        if (await locator.first().isVisible({ timeout: 500 })) {
+          return locator.first();
+        }
+      } catch {
+        // Try next
+      }
+    }
+
+    return null;
+  }
+
+  private async extractAnswer(page: Page): Promise<string> {
+    // Try multiple selectors for the answer
+    const answerSelectors = [
+      // Main answer container
+      '[data-testid*="answer"]',
+      '.prose',
+      '[class*="answer"]',
+      '[class*="response"]',
+      '[class*="result"]',
+      // Perplexity specific classes (may change)
+      '.markdown',
+      '[class*="Markdown"]',
+      // Generic content areas
+      'main article',
+      'main div[class*="content"]',
+      // Fallback
+      'main',
+    ];
+
+    for (const selector of answerSelectors) {
+      try {
+        const element = page.locator(selector).first();
+        if (await element.isVisible({ timeout: 2000 })) {
+          const text = await element.innerText();
+          if (text && text.length > 50) {
+            console.error(`[Perplexity] Found answer using selector: ${selector}`);
+            return text;
+          }
+        }
+      } catch {
+        // Try next
+      }
+    }
+
+    // Last resort: get all visible text from main content area
+    try {
+      const mainContent = await page.locator('body').innerText();
+      // Try to extract relevant portion
+      const lines = mainContent.split('\n').filter(l => l.trim().length > 20);
+      return lines.slice(0, 20).join('\n');
+    } catch {
+      return '';
+    }
+  }
 
   async initialize(): Promise<void> {
     if (this.session) return;
@@ -41,31 +168,72 @@ class PerplexityAutomation {
 
     const context = await chromium.launchPersistentContext(this.userDataDir, {
       headless: false,
-      viewport: { width: 1280, height: 800 },
+      viewport: { width: 1280, height: 900 },
       locale: 'en-US',
+      timezoneId: 'America/New_York',
       args: [
         '--disable-blink-features=AutomationControlled',
         '--disable-infobars',
         '--no-first-run',
         '--no-default-browser-check',
+        '--disable-web-security',
+        '--disable-features=IsolateOrigins,site-per-process',
       ],
+      ignoreHTTPSErrors: true,
     });
 
     const page = context.pages()[0] || await context.newPage();
 
     // Set up stealth mode
     await page.addInitScript(() => {
+      // Remove webdriver property
       Object.defineProperty(navigator, 'webdriver', {
         get: () => undefined,
       });
+      // Override plugins
+      Object.defineProperty(navigator, 'plugins', {
+        get: () => [1, 2, 3, 4, 5],
+      });
+      // Override languages
+      Object.defineProperty(navigator, 'languages', {
+        get: () => ['en-US', 'en'],
+      });
+      // Override chrome property
+      (window as any).chrome = { runtime: {} };
     });
 
-    // Check if already logged in
-    await page.goto('https://www.perplexity.ai', { waitUntil: 'networkidle' });
-    await page.waitForTimeout(2000);
+    // Navigate to Perplexity
+    console.error('[Perplexity] Navigating to perplexity.ai...');
+    await page.goto('https://www.perplexity.ai', { 
+      waitUntil: 'domcontentloaded',
+      timeout: 60000 
+    });
 
-    const loginButton = await page.locator('button:has-text("Sign In"), button:has-text("Log in")').first();
-    const isLoggedIn = !(await loginButton.isVisible().catch(() => false));
+    // Wait for page to stabilize
+    await page.waitForTimeout(3000);
+
+    // Save screenshot for debugging
+    await this.saveDebugScreenshot(page, 'init');
+
+    // Check login status
+    let isLoggedIn = true;
+    try {
+      const signInButton = page.locator('button:has-text("Sign"), a:has-text("Sign"), [href*="login"], [href*="auth"]').first();
+      isLoggedIn = !(await signInButton.isVisible({ timeout: 2000 }));
+    } catch {
+      isLoggedIn = true;
+    }
+
+    // Check for cookie consent
+    try {
+      const acceptCookies = page.locator('button:has-text("Accept"), button:has-text("Accept All"), button:has-text("I agree")').first();
+      if (await acceptCookies.isVisible({ timeout: 2000 })) {
+        await acceptCookies.click();
+        await page.waitForTimeout(1000);
+      }
+    } catch {
+      // No cookie consent
+    }
 
     this.session = {
       context,
@@ -92,77 +260,97 @@ class PerplexityAutomation {
       console.error(`[Perplexity] Searching: "${query}" (mode: ${mode})`);
 
       // Navigate to Perplexity
-      await page.goto('https://www.perplexity.ai', { waitUntil: 'networkidle' });
-      await page.waitForTimeout(1000);
+      await page.goto('https://www.perplexity.ai', { 
+        waitUntil: 'domcontentloaded',
+        timeout: 60000 
+      });
+      await page.waitForTimeout(2000);
 
-      // Select mode if needed (for copilot or deep search)
-      if (mode !== 'concise') {
-        try {
-          const modeSelector = page.locator('[data-testid="mode-selector"], button:has-text("Focus")').first();
-          if (await modeSelector.isVisible({ timeout: 2000 })) {
-            await modeSelector.click();
-            await page.waitForTimeout(500);
+      // Save debug screenshot
+      await this.saveDebugScreenshot(page, 'before-search');
 
-            const modeOption = page.locator(`button:has-text("${mode.charAt(0).toUpperCase() + mode.slice(1)}")`).first();
-            if (await modeOption.isVisible({ timeout: 1000 })) {
-              await modeOption.click();
-              await page.waitForTimeout(500);
-            }
-          }
-        } catch {
-          // Mode selection not available, continue with default
-        }
+      // Find search input
+      console.error('[Perplexity] Looking for search input...');
+      const searchInput = await this.findSearchInput(page);
+
+      if (!searchInput) {
+        await this.saveDebugScreenshot(page, 'no-input-found');
+        return { 
+          success: false, 
+          error: 'Could not find search input on page. The page may have changed or there may be a popup.',
+          debug: 'Screenshot saved to debug-screenshots/'
+        };
       }
 
-      // Find and fill the search input
-      const searchInput = page.locator('textarea[placeholder*="Ask"], textarea[placeholder*="question"], textarea').first();
-      await searchInput.waitFor({ state: 'visible', timeout: 10000 });
-      await searchInput.click();
-      await searchInput.fill('');
+      const { locator } = searchInput;
 
-      // Type the query with human-like delay
-      await searchInput.type(query, { delay: 30 });
+      // Clear and focus the input
+      await locator.click();
+      await page.waitForTimeout(300);
 
-      // Submit the search
-      await page.keyboard.press('Enter');
+      // Select all and clear
+      await page.keyboard.press('Control+a');
+      await page.keyboard.press('Backspace');
+      await page.waitForTimeout(300);
+
+      // Type the query
+      console.error('[Perplexity] Typing query...');
+      await locator.type(query, { delay: 20 });
+      await page.waitForTimeout(500);
+
+      // Try to find and click submit button, or press Enter
+      const submitButton = await this.findSubmitButton(page);
+      if (submitButton) {
+        console.error('[Perplexity] Clicking submit button...');
+        await submitButton.click();
+      } else {
+        console.error('[Perplexity] Pressing Enter...');
+        await page.keyboard.press('Enter');
+      }
 
       console.error('[Perplexity] Waiting for response...');
 
-      // Wait for the response to appear
-      await page.waitForSelector('[data-testid="answer"], .prose, [class*="answer"]', {
-        timeout: 60000,
-      }).catch(() => null);
-
-      // Wait a bit for the full response to load
+      // Wait for navigation or response
       await page.waitForTimeout(3000);
 
-      // Extract the answer
-      const answerElement = await page.locator('[data-testid="answer"], .prose, [class*="answer"], [class*="response"]').first();
+      // Wait for answer to appear (multiple attempts)
+      let attempts = 0;
       let answer = '';
 
-      try {
-        answer = await answerElement.innerText({ timeout: 5000 });
-      } catch {
-        // Try alternative selectors
-        const alternativeAnswer = await page.locator('main').locator('div').nth(2).innerText().catch(() => '');
-        if (alternativeAnswer) {
-          answer = alternativeAnswer;
+      while (attempts < 30 && !answer) {
+        await page.waitForTimeout(2000);
+        answer = await this.extractAnswer(page);
+        attempts++;
+
+        if (attempts % 5 === 0) {
+          console.error(`[Perplexity] Still waiting... (${attempts * 2}s)`);
+          await this.saveDebugScreenshot(page, `waiting-${attempts}`);
         }
       }
+
+      // Save final screenshot
+      await this.saveDebugScreenshot(page, 'response');
 
       // Extract sources
       const sources: Array<{ title: string; url: string }> = [];
       try {
-        const sourceElements = await page.locator('a[href^="http"]').all();
-        for (const source of sourceElements.slice(0, 10)) {
-          const title = await source.innerText().catch(() => '');
-          const url = await source.getAttribute('href').catch(() => '');
-          if (url && title && !sources.find(s => s.url === url)) {
-            sources.push({ title: title.trim(), url });
+        const links = await page.locator('a[href^="http"]').all();
+        for (const link of links.slice(0, 15)) {
+          try {
+            const href = await link.getAttribute('href');
+            const text = await link.innerText();
+            if (href && text && text.trim().length > 0 && text.length < 200) {
+              // Filter out navigation links
+              if (!href.includes('perplexity.ai') && !sources.find(s => s.url === href)) {
+                sources.push({ title: text.trim().substring(0, 100), url: href });
+              }
+            }
+          } catch {
+            // Skip this link
           }
         }
-      } catch {
-        // Sources extraction failed, continue without them
+      } catch (e) {
+        console.error('[Perplexity] Failed to extract sources:', e);
       }
 
       console.error(`[Perplexity] Got response (${answer.length} chars, ${sources.length} sources)`);
@@ -170,14 +358,18 @@ class PerplexityAutomation {
       return {
         success: true,
         answer: answer || 'No answer received from Perplexity',
-        sources,
+        sources: sources.slice(0, 10),
       };
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : 'Unknown error';
       console.error(`[Perplexity] Error: ${errorMessage}`);
+      
+      await this.saveDebugScreenshot(page, 'error');
+      
       return {
         success: false,
         error: errorMessage,
+        debug: 'Screenshot saved to debug-screenshots/',
       };
     }
   }
@@ -295,10 +487,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
         const parsed = proSchema.parse(args);
 
-        // Navigate with focus if specified
         let searchQuery = parsed.query;
         if (parsed.focus) {
-          // Add focus indicator to the search
           searchQuery = `[${parsed.focus}] ${parsed.query}`;
         }
 
@@ -351,6 +541,17 @@ app.use(express.json());
 // Health check
 app.get('/health', (req, res) => {
   res.json({ status: 'ok', service: 'perplexity-mcp-server' });
+});
+
+// Debug endpoint - list screenshots
+app.get('/debug/screenshots', (req, res) => {
+  const debugDir = './debug-screenshots';
+  if (!fs.existsSync(debugDir)) {
+    res.json({ screenshots: [] });
+    return;
+  }
+  const files = fs.readdirSync(debugDir).filter(f => f.endsWith('.png'));
+  res.json({ screenshots: files });
 });
 
 // Search endpoint
