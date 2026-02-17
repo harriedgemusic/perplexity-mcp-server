@@ -400,8 +400,10 @@ class PerplexityAutomation {
 
     console.error('[Perplexity] Initializing browser session...');
 
+    // Use system Chrome on macOS
     const context = await chromium.launchPersistentContext(this.userDataDir, {
       headless: false,
+      channel: 'chrome', // Use installed Google Chrome
       viewport: { width: 1280, height: 900 },
       locale: 'en-US',
       timezoneId: 'America/New_York',
