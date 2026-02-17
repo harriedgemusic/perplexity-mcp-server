@@ -390,12 +390,12 @@ class PerplexityAutomation {
 
     console.error('[Perplexity] Initializing browser session...');
 
-    // Use Arc (Comet) browser on macOS
-    const arcPath = '/Applications/Arc.app/Contents/MacOS/Arc';
+    // Use Comet browser on macOS
+    const cometPath = '/Applications/Comet.app/Contents/MacOS/Comet';
     
     const context = await chromium.launchPersistentContext(this.userDataDir, {
       headless: false,
-      executablePath: arcPath, // Use Arc (Comet) browser
+      executablePath: cometPath, // Use Comet browser
       viewport: { width: 1280, height: 900 },
       locale: 'en-US',
       timezoneId: 'America/New_York',
