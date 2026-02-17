@@ -1,0 +1,125 @@
+{
+  "name": "perplexity-mcp-client",
+  "displayName": "Perplexity MCP Client",
+  "description": "VSCode extension that connects to Perplexity via MCP Server",
+  "version": "1.0.0",
+  "publisher": "perplexity-mcp",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Other",
+    "Programming Languages",
+    "Machine Learning"
+  ],
+  "keywords": [
+    "perplexity",
+    "ai",
+    "search",
+    "mcp",
+    "assistant"
+  ],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "main": "./out/extension.js",
+  "icon": "media/icon.png",
+  "contributes": {
+    "commands": [
+      {
+        "command": "perplexity.search",
+        "title": "Perplexity: Search",
+        "icon": "$(search)"
+      },
+      {
+        "command": "perplexity.proSearch",
+        "title": "Perplexity: Pro Search",
+        "icon": "$(beaker)"
+      },
+      {
+        "command": "perplexity.initSession",
+        "title": "Perplexity: Initialize Session"
+      },
+      {
+        "command": "perplexity.openPanel",
+        "title": "Perplexity: Open Panel"
+      }
+    ],
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "perplexity-sidebar",
+          "title": "Perplexity AI",
+          "icon": "media/sidebar-icon.svg"
+        }
+      ]
+    },
+    "views": {
+      "perplexity-sidebar": [
+        {
+          "type": "webview",
+          "id": "perplexity.chatView",
+          "name": "Chat"
+        }
+      ]
+    },
+    "menus": {
+      "editor/context": [
+        {
+          "command": "perplexity.search",
+          "when": "editorHasSelection",
+          "group": "perplexity@1"
+        }
+      ]
+    },
+    "keybindings": [
+      {
+        "command": "perplexity.search",
+        "key": "ctrl+shift+p",
+        "mac": "cmd+shift+p",
+        "when": "editorTextFocus"
+      }
+    ],
+    "configuration": {
+      "title": "Perplexity MCP Client",
+      "properties": {
+        "perplexityMcp.serverUrl": {
+          "type": "string",
+          "default": "http://localhost:3333",
+          "description": "URL of the Perplexity MCP Server"
+        },
+        "perplexityMcp.defaultMode": {
+          "type": "string",
+          "enum": ["concise", "copilot", "deep"],
+          "default": "concise",
+          "description": "Default search mode"
+        },
+        "perplexityMcp.autoInit": {
+          "type": "boolean",
+          "default": true,
+          "description": "Automatically initialize session on startup"
+        }
+      }
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "pretest": "npm run compile",
+    "lint": "eslint src --ext ts",
+    "package": "vsce package"
+  },
+  "devDependencies": {
+    "@types/node": "^20.10.0",
+    "@types/vscode": "^1.85.0",
+    "@typescript-eslint/eslint-plugin": "^6.13.0",
+    "@typescript-eslint/parser": "^6.13.0",
+    "eslint": "^8.54.0",
+    "typescript": "^5.3.0",
+    "@vscode/vsce": "^2.22.0"
+  },
+  "dependencies": {
+    "axios": "^1.6.2"
+  }
+}
