@@ -1,0 +1,22 @@
+{
+  "name": "perplexity-mcp-server-monorepo",
+  "version": "1.0.0",
+  "description": "MCP Server wrapper for Perplexity Web + VSCode Extension",
+  "private": true,
+  "workspaces": [
+    "mcp-server",
+    "vscode-extension"
+  ],
+  "scripts": {
+    "install:all": "npm install && cd mcp-server && npm install && cd ../vscode-extension && npm install",
+    "build": "npm run build --workspace=mcp-server && npm run compile --workspace=vscode-extension",
+    "dev": "npm run dev --workspace=mcp-server",
+    "start": "npm run start --workspace=mcp-server"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/harriedgemusic/perplexity-mcp-server.git"
+  },
+  "author": "",
+  "license": "MIT"
+}

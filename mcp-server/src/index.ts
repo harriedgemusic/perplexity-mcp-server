@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
-import { StdServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
+import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import {
   CallToolRequestSchema,
   ListToolsRequestSchema,
@@ -16,7 +16,6 @@ import { z } from 'zod';
 // ==================== TYPES ====================
 
 interface PerplexitySession {
-  browser: Browser;
   context: BrowserContext;
   page: Page;
   isLoggedIn: boolean;
@@ -40,7 +39,7 @@ class PerplexityAutomation {
 
     console.error('[Perplexity] Initializing browser session...');
 
-    const browser = await chromium.launchPersistentContext(this.userDataDir, {
+    const context = await chromium.launchPersistentContext(this.userDataDir, {
       headless: false,
       viewport: { width: 1280, height: 800 },
       locale: 'en-US',
@@ -52,7 +51,7 @@ class PerplexityAutomation {
       ],
     });
 
-    const page = browser.pages()[0] || await browser.newPage();
+    const page = context.pages()[0] || await context.newPage();
 
     // Set up stealth mode
     await page.addInitScript(() => {
@@ -69,8 +68,7 @@ class PerplexityAutomation {
     const isLoggedIn = !(await loginButton.isVisible().catch(() => false));
 
     this.session = {
-      browser,
-      context: browser,
+      context,
       page,
       isLoggedIn,
     };
@@ -186,7 +184,7 @@ class PerplexityAutomation {
 
   async close(): Promise<void> {
     if (this.session) {
-      await this.session.browser.close();
+      await this.session.context.close();
       this.session = null;
       console.error('[Perplexity] Session closed');
     }
@@ -401,7 +399,7 @@ async function main() {
   console.error('[MCP Server] Starting Perplexity MCP Server...');
   console.error('[MCP Server] HTTP endpoint: http://localhost:' + HTTP_PORT);
 
-  const transport = new StdServerTransport();
+  const transport = new StdioServerTransport();
   await server.connect(transport);
 
   console.error('[MCP Server] Connected via stdio transport');
