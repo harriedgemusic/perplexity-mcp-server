@@ -297,99 +297,89 @@ class PerplexityAutomation {
   }
 
   /**
-   * Extract answer - find the container that comes AFTER the completion indicator
+   * Extract answer - find the markdown container with the main response
    */
   private async extractAnswer(page: Page): Promise<string> {
-    console.error('[Perplexity] Extracting answer...');
+    console.error('[Perplexity] Extracting answer from markdown container...');
 
-    // First, analyze the page structure
+    // First, analyze the page structure for debugging
     await this.analyzePageStructure(page);
 
-    // Strategy 1: Find completion indicator, then get the answer container that follows
-    try {
-      const completeIndicator = page.locator('div.flex.items-center.justify-between').first();
-      if (await completeIndicator.isVisible({ timeout: 1000 })) {
-        // Get the parent container that holds the answer
-        // The structure is usually: parent > [answer content] > [completion indicator]
-        const parentContainer = completeIndicator.locator('xpath=..');
-        const grandParentContainer = parentContainer.locator('xpath=..');
-        
-        // Try to find the answer in siblings before the completion indicator
-        const answerContainer = completeIndicator.locator('xpath=preceding-sibling::*[1]');
-        if (await answerContainer.count() > 0) {
-          const text = await answerContainer.first().innerText();
-          if (text && text.length > 50) {
-            console.error('[Perplexity] Found answer in preceding sibling of completion indicator');
-            return text;
-          }
-        }
-
-        // Try grandparent's first child (often contains the answer)
-        const firstChild = grandParentContainer.locator('> :first-child');
-        if (await firstChild.count() > 0) {
-          const text = await firstChild.first().innerText();
-          if (text && text.length > 50) {
-            console.error('[Perplexity] Found answer in first child of grandparent');
-            return text;
-          }
-        }
-      }
-    } catch (e) {
-      console.error('[Perplexity] Strategy 1 failed:', e);
-    }
-
-    // Strategy 2: Find .gap-y-md and get content after "Finished" appears
-    try {
-      const gapContainer = page.locator('.gap-y-md').first();
-      if (await gapContainer.isVisible({ timeout: 2000 })) {
-        // Get the last substantial text content
-        const allText = await gapContainer.innerText();
-        
-        // Find where "Finished" appears and extract content after it
-        const finishedIndex = allText.indexOf('Finished');
-        if (finishedIndex > -1) {
-          // Get text after "Finished" indicator
-          const afterFinished = allText.substring(finishedIndex + 10).trim();
-          if (afterFinished.length > 50) {
-            console.error('[Perplexity] Found answer after "Finished" marker');
-            return afterFinished;
-          }
-        }
-
-        // Return full content if no "Finished" marker
-        if (allText && allText.trim().length > 0) {
-          console.error('[Perplexity] Found answer in .gap-y-md');
-          return allText.trim();
-        }
-      }
-    } catch (e) {
-      console.error('[Perplexity] Strategy 2 failed:', e);
-    }
-
-    // Strategy 3: Find prose/markdown content
-    const answerSelectors = [
-      '.prose',
+    // Primary: Find markdown container - the main answer content
+    const markdownSelectors = [
+      // Perplexity markdown containers
       '[class*="markdown"]',
-      '[class*="Markdown"]', 
-      '[class*="answer"]',
-      '[class*="response"]',
-      'article',
-      'main > div > div',
+      '[class*="Markdown"]',
+      '.markdown-body',
+      '.markdown-content',
+      '.prose',
+      // Generic markdown classes
+      '[class*="prose"]',
+      'article .prose',
+      // Content containers
+      '[data-testid*="answer"]',
+      '[data-testid*="response"]',
     ];
 
-    for (const selector of answerSelectors) {
+    for (const selector of markdownSelectors) {
       try {
         const elements = await page.locator(selector).all();
+        console.error(`[Perplexity] Checking ${elements.length} elements for selector: ${selector}`);
+        
         for (const element of elements) {
           const text = await element.innerText();
           if (text && text.length > 100) {
-            console.error(`[Perplexity] Found answer using selector: ${selector}`);
-            return text;
+            // Check if this looks like an answer (not navigation, not footer)
+            const className = await element.getAttribute('class') || '';
+            const isNavigation = className.includes('nav') || className.includes('header') || className.includes('footer');
+            
+            if (!isNavigation) {
+              console.error(`[Perplexity] Found markdown answer using selector: ${selector}`);
+              console.error(`[Perplexity] Answer length: ${text.length} chars`);
+              return text.trim();
+            }
           }
         }
-      } catch {
-        // Try next
+      } catch (e) {
+        console.error(`[Perplexity] Selector ${selector} failed:`, e);
       }
+    }
+
+    // Fallback: Look for the largest text block in main content area
+    try {
+      const mainContent = page.locator('main').first();
+      if (await mainContent.isVisible({ timeout: 2000 })) {
+        // Find the largest div/section inside main
+        const children = await mainContent.locator('> div, > section, > article').all();
+        let largestText = '';
+        
+        for (const child of children) {
+          const text = await child.innerText();
+          if (text && text.length > largestText.length) {
+            largestText = text;
+          }
+        }
+        
+        if (largestText.length > 50) {
+          console.error('[Perplexity] Found answer in main content (largest block)');
+          return largestText.trim();
+        }
+      }
+    } catch (e) {
+      console.error('[Perplexity] Main content fallback failed:', e);
+    }
+
+    // Last resort: get visible text from page
+    try {
+      const bodyText = await page.locator('body').innerText();
+      // Try to extract relevant portion
+      const lines = bodyText.split('\n').filter(l => l.trim().length > 30);
+      if (lines.length > 0) {
+        console.error('[Perplexity] Using fallback body text');
+        return lines.slice(0, 30).join('\n');
+      }
+    } catch (e) {
+      console.error('[Perplexity] Body text fallback failed:', e);
     }
 
     return '';
@@ -400,10 +390,12 @@ class PerplexityAutomation {
 
     console.error('[Perplexity] Initializing browser session...');
 
-    // Use system Chrome on macOS
+    // Use Arc (Comet) browser on macOS
+    const arcPath = '/Applications/Arc.app/Contents/MacOS/Arc';
+    
     const context = await chromium.launchPersistentContext(this.userDataDir, {
       headless: false,
-      channel: 'chrome', // Use installed Google Chrome
+      executablePath: arcPath, // Use Arc (Comet) browser
       viewport: { width: 1280, height: 900 },
       locale: 'en-US',
       timezoneId: 'America/New_York',
