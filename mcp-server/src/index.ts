@@ -116,29 +116,53 @@ class PerplexityAutomation {
     return null;
   }
 
+  /**
+   * Check if response is complete by looking for the completion indicator
+   */
+  private async isResponseComplete(page: Page): Promise<boolean> {
+    try {
+      // This selector appears when Perplexity finishes generating the answer
+      const completeIndicator = page.locator('div.flex.items-center.justify-between').first();
+      return await completeIndicator.isVisible({ timeout: 1000 });
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * Extract answer from .gap-y-md container (the main answer content)
+   */
   private async extractAnswer(page: Page): Promise<string> {
-    // Try multiple selectors for the answer
+    // Primary: extract from .gap-y-md as specified
+    try {
+      const gapContainer = page.locator('.gap-y-md').first();
+      if (await gapContainer.isVisible({ timeout: 2000 })) {
+        const text = await gapContainer.innerText();
+        if (text && text.trim().length > 0) {
+          console.error('[Perplexity] Found answer in .gap-y-md');
+          return text.trim();
+        }
+      }
+    } catch {
+      // Fall through to alternatives
+    }
+
+    // Fallback selectors for the answer
     const answerSelectors = [
-      // Main answer container
+      '.gap-y-md',
       '[data-testid*="answer"]',
       '.prose',
       '[class*="answer"]',
       '[class*="response"]',
-      '[class*="result"]',
-      // Perplexity specific classes (may change)
       '.markdown',
       '[class*="Markdown"]',
-      // Generic content areas
       'main article',
-      'main div[class*="content"]',
-      // Fallback
-      'main',
     ];
 
     for (const selector of answerSelectors) {
       try {
         const element = page.locator(selector).first();
-        if (await element.isVisible({ timeout: 2000 })) {
+        if (await element.isVisible({ timeout: 1000 })) {
           const text = await element.innerText();
           if (text && text.length > 50) {
             console.error(`[Perplexity] Found answer using selector: ${selector}`);
@@ -150,15 +174,7 @@ class PerplexityAutomation {
       }
     }
 
-    // Last resort: get all visible text from main content area
-    try {
-      const mainContent = await page.locator('body').innerText();
-      // Try to extract relevant portion
-      const lines = mainContent.split('\n').filter(l => l.trim().length > 20);
-      return lines.slice(0, 20).join('\n');
-    } catch {
-      return '';
-    }
+    return '';
   }
 
   async initialize(): Promise<void> {
@@ -310,23 +326,44 @@ class PerplexityAutomation {
 
       console.error('[Perplexity] Waiting for response...');
 
-      // Wait for navigation or response
-      await page.waitForTimeout(3000);
+      // Wait for page to start loading
+      await page.waitForTimeout(2000);
 
-      // Wait for answer to appear (multiple attempts)
+      // Wait for the completion indicator: div.flex.items-center.justify-between
+      // This element appears when Perplexity finishes generating the answer
+      console.error('[Perplexity] Waiting for completion indicator...');
+      const completionSelector = 'div.flex.items-center.justify-between';
+      
       let attempts = 0;
-      let answer = '';
-
-      while (attempts < 30 && !answer) {
+      const maxAttempts = 60; // 60 attempts x 2 seconds = 2 minutes max
+      
+      while (attempts < maxAttempts) {
+        const isComplete = await this.isResponseComplete(page);
+        
+        if (isComplete) {
+          console.error('[Perplexity] Completion indicator found! Response is ready.');
+          break;
+        }
+        
         await page.waitForTimeout(2000);
-        answer = await this.extractAnswer(page);
         attempts++;
-
-        if (attempts % 5 === 0) {
-          console.error(`[Perplexity] Still waiting... (${attempts * 2}s)`);
+        
+        if (attempts % 10 === 0) {
+          console.error(`[Perplexity] Still waiting for response... (${attempts * 2}s)`);
           await this.saveDebugScreenshot(page, `waiting-${attempts}`);
         }
       }
+
+      if (attempts >= maxAttempts) {
+        console.error('[Perplexity] Timeout waiting for completion indicator');
+        await this.saveDebugScreenshot(page, 'timeout');
+      }
+
+      // Small delay to ensure content is fully rendered
+      await page.waitForTimeout(1000);
+
+      // Now extract the answer from .gap-y-md
+      const answer = await this.extractAnswer(page);
 
       // Save final screenshot
       await this.saveDebugScreenshot(page, 'response');
